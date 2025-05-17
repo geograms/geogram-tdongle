@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Files</title>
+  <style>
+    body { font-family: sans-serif; background: #f0f0f0; padding: 2em; }
+    .box { background: white; padding: 1em; max-width: 600px; margin: auto; border-radius: 8px; box-shadow: 0 0 8px rgba(0,0,0,0.1); }
+    h2 { margin-top: 0; }
+    .file { display: flex; justify-content: space-between; align-items: center; padding: 0.25em 0; }
+    input[type="file"] { display: block; margin: 1em 0; }
+    .actions button { margin-left: 0.5em; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h2>Files</h2>
+
+    <input type="file" id="upload" multiple>
+    <div id="filelist"></div>
+  </div>
+
+  <script>
+    async function refresh() {
+      const res = await fetch('/api/files/list');
+      const files = await res.json();
+      const list = document.getElementById('filelist');
+      list.innerHTML = '';
+      files.forEach(file => {
+        const div = document.createElement('div');
+        div.className = 'file';
+        div.innerHTML = `
+          <span>${file.name} (${file.size} bytes)</span>
+          <span class="actions">
+            <button onclick="download('${file.name}')">Download</button>
+            <button onclick="renameFile('${file.name}')">Rename</button>
+            <button onclick="deleteFile('${file.name}')">Delete</button>
+          </span>
+        `;
+        list.appendChild(div);
+      });
+    }
+
+    function download(name) {
+      window.location = '/api/files/read?name=' + encodeURIComponent(name);
+    }
+
+    function deleteFile(name) {
+      fetch('/api/files/delete?name=' + encodeURIComponent(name))
+        .then(() => refresh());
+    }
+
+    function renameFile(oldName) {
+      const newName = prompt("New name:", oldName);
+      if (!newName || newName === oldName) return;
+      fetch('/api/files/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `old=${encodeURIComponent(oldName)}&new=${encodeURIComponent(newName)}`
+      }).then(() => refresh());
+    }
+
+    document.getElementById('upload').addEventListener('change', async evt => {
+      for (const file of evt.target.files) {
+        const form = new FormData();
+        form.append('file', file, file.name);
+        await fetch('/api/files/upload', { method: 'POST', body: form });
+      }
+      refresh();
+    });
+
+    refresh();
+  </script>
+</body>
+</html>

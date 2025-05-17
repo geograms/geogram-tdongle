@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Geogram Config</title>
+  <style>
+    body { font-family: sans-serif; background: #f0f0f0; padding: 2em; }
+    input, button { font-size: 1em; padding: 0.5em; width: 100%; margin: 0.5em 0; }
+    .box { background: white; padding: 1em; max-width: 400px; margin: auto; border-radius: 8px; box-shadow: 0 0 8px rgba(0,0,0,0.1); }
+    .error { color: red; font-size: 0.9em; margin-top: -0.5em; margin-bottom: 0.5em; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h2>Geogram Configuration</h2>
+
+    <label>Wi-Fi SSID</label>
+    <input type="text" id="wifi_ssid"><div id="err_wifi_ssid" class="error"></div>
+
+    <label>Wi-Fi Password</label>
+    <input type="password" id="wifi_password"><div id="err_wifi_password" class="error"></div>
+
+    <label>Hotspot Name</label>
+    <input type="text" id="wifi_hotspot_name"><div id="err_wifi_hotspot_name" class="error"></div>
+
+    <label>Device ID</label>
+    <input type="text" id="device_id"><div id="err_device_id" class="error"></div>
+
+    <label>Payload Message</label>
+    <input type="text" id="device_payload"><div id="err_device_payload" class="error"></div>
+
+    <label>Config Password (optional)</label>
+    <input type="password" id="config_password"><div id="err_config_password" class="error"></div>
+
+    <button onclick="save()">Save</button>
+    <div id="status"></div>
+  </div>
+
+  <script>
+    async function load() {
+      const res = await fetch('/api/load');
+      const cfg = await res.json();
+      document.getElementById('wifi_ssid').value = cfg.wifi_ssid || '';
+      document.getElementById('wifi_password').value = cfg.wifi_password || '';
+      document.getElementById('wifi_hotspot_name').value = cfg.wifi_hotspot_name || '';
+      document.getElementById('device_id').value = cfg.device_id || '';
+      document.getElementById('device_payload').value = cfg.device_payload || '';
+      document.getElementById('config_password').value = cfg.config_password || '';
+    }
+
+    function clearErrors() {
+      const keys = ["wifi_ssid", "wifi_password", "wifi_hotspot_name", "device_id", "device_payload", "config_password"];
+      for (const key of keys) {
+        document.getElementById("err_" + key).innerText = "";
+      }
+    }
+
+    async function save() {
+      clearErrors();
+      const data = new URLSearchParams();
+      data.append("wifi_ssid", document.getElementById('wifi_ssid').value);
+      data.append("wifi_password", document.getElementById('wifi_password').value);
+      data.append("wifi_hotspot_name", document.getElementById('wifi_hotspot_name').value);
+      data.append("device_id", document.getElementById('device_id').value);
+      data.append("device_payload", document.getElementById('device_payload').value);
+      data.append("config_password", document.getElementById('config_password').value);
+
+      const res = await fetch('/api/save', {
+        method: "POST",
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: data
+      });
+
+      if (res.ok) {
+        document.getElementById("status").innerText = "✅ Saved";
+      } else {
+        const err = await res.json();
+        for (const key in err) {
+          const el = document.getElementById("err_" + key);
+          if (el) el.innerText = err[key];
+        }
+        document.getElementById("status").innerText = "❌ Error saving";
+      }
+    }
+
+    load();
+  </script>
+</body>
+</html>

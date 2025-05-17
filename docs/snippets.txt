@@ -1,0 +1,4 @@
+
+
+Upload files to the memory disk:
+pio run --target uploadfs

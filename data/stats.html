@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Geogram Stats</title>
+  <style>
+    body { font-family: sans-serif; background: #f0f0f0; padding: 2em; }
+    .box { background: white; padding: 1em; max-width: 600px; margin: auto; border-radius: 8px; box-shadow: 0 0 8px rgba(0,0,0,0.1); }
+    table { width: 100%; border-collapse: collapse; margin-top: 1em; }
+    th, td { padding: 0.5em; border-bottom: 1px solid #ddd; text-align: left; font-size: 0.95em; }
+    th { background-color: #f8f8f8; }
+    h2, h3 { margin-top: 0.5em; }
+  </style>
+</head>
+<body>
+  <div class="box">
+    <h2>Detected Device Stats</h2>
+    <div id="content">Loading...</div>
+  </div>
+
+  <script>
+    async function loadStats() {
+      const res = await fetch('/api/stats');
+      const data = await res.json();
+
+      let html = "";
+
+      for (const deviceId in data) {
+        const stat = data[deviceId];
+        html += `<h3>${deviceId}</h3>`;
+        html += `<table>
+          <tr><th>Range</th><th>Minutes Present</th></tr>
+          <tr><td>Today</td><td>${stat.today}</td></tr>
+          <tr><td>Last 5 days</td><td>${stat.last5}</td></tr>
+          <tr><td>Last 30 days</td><td>${stat.last30}</td></tr>
+        </table>`;
+      }
+
+      document.getElementById("content").innerHTML = html || "No stats available.";
+    }
+
+    loadStats();
+  </script>
+</body>
+</html>

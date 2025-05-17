@@ -1,0 +1,72 @@
+{
+  "intro": {
+    "logo": "/images/logo.png",
+    "banner": "/images/banner.jpg",
+    "title": "Welcome to Our Project",
+    "description": "Exploring the frontier of embedded connectivity and UI on ESP32.",
+    "links": [
+      { "title": "Contacts", "url": "/contacts/" },
+      { "title": "Blog", "url": "/blog/" },
+      { "title": "Downloads", "url": "/downloads/" }
+    ]
+  },
+  "apps": [
+    { "title": "Chat", "url": "/app/chat/" },
+    { "title": "Messages", "url": "/app/messages/" },
+    { "title": "Presence", "url": "/app/presence/" }
+  ],
+  "news": [
+    {
+      "title": "System Overheating",
+      "date": "2025-03-10",
+      "level": "danger",
+      "status": "active",
+      "excerpt": "Temperature exceeded safety limits. Immediate attention required.",
+      "url": "/news/2025-03-10_overheating.html"
+    },
+    {
+      "title": "Firmware v2 Released",
+      "date": "2025-03-28",
+      "level": "routine",
+      "status": "active",
+      "excerpt": "Routine update with minor improvements and stability fixes.",
+      "url": "/news/2025-03-28_firmware_v2_released.html"
+    }
+  ],
+  "gallery": [
+    { "thumb": "/images/thumbs/DSC19023_thumb.jpg", "full": "/images/DSC19023.jpg" },
+    { "thumb": "/images/thumbs/DSC19024_thumb.jpg", "full": "/images/DSC19024.jpg" },
+    { "thumb": "/images/thumbs/DSC19025_thumb.jpg", "full": "/images/DSC19025.jpg" }
+  ],
+  "blog": [
+    {
+      "title": "ESP32 Goes Offline-First",
+      "date": "2025-03-20",
+      "excerpt": "Building offline-first apps using embedded file systems and local data storage.",
+      "url": "/blog/offline-first.html"
+    },
+    {
+      "title": "Bringing UI to Tiny Screens",
+      "date": "2025-03-10",
+      "excerpt": "Designing elegant UIs for embedded devices.",
+      "url": "/blog/ui-tiny-screens.html"
+    }
+  ],
+  "status": {
+    "uptime": "3 days, 4 hours",
+    "storage": "12.5 MB used / 32 MB total",
+    "media_count": 42,
+    "message_count": 318
+  },
+  "footer": {
+    "copyright": "© 2025 OffGrid"
+  },
+  "customization": {
+    "background_color": "#0e1b0e",
+    "text_color": "#cfeac8",
+    "accent_color": "#a9dc9c",
+    "link_color": "#b1e4b3",
+    "card_color": "#1b2e1b",
+    "border_color": "#406343"
+  }
+}

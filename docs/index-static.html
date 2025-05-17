@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>geogram</title>
+  <style>
+    :root {
+      --bg: #0e1b0e;
+      --text: #cfeac8;
+      --accent: #a9dc9c;
+      --link: #b1e4b3;
+      --card: #1b2e1b;
+      --border: #406343;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: system-ui, sans-serif;
+      overflow-x: hidden;
+    }
+
+    body {
+      position: relative;
+      z-index: 0;
+    }
+
+    #wave-bg {
+      position: fixed;
+      top: 0;
+      left: 0;
+      z-index: -1;
+      width: 100vw;
+      height: 100vh;
+      background: black;
+    }
+    
+    .section-link {
+      display: inline-block;
+      margin-bottom: 0.8em;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: flex-end;
+      background: var(--card);
+      padding: 0.5em 1em;
+    }
+
+    .topbar a {
+      color: var(--link);
+      text-decoration: none;
+      font-size: 0.9em;
+      margin-left: 0.5em;
+    }
+
+    .main-layout {
+      display: flex;
+      flex-direction: row;
+      gap: 2em;
+      padding: 2em;
+      max-width: 1200px;
+      margin: auto;
+    }
+
+    .left-column { flex: 3; }
+    .right-column { flex: 1; }
+
+    .banner {
+      width: 100%;
+      height: 180px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 1em;
+    }
+
+    .banner img {
+      max-height: 160px;
+      width: auto;
+    }
+
+    h2 {
+      color: var(--accent);
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 0.3em;
+      margin-top: 2em;
+    }
+
+    a {
+      color: var(--link);
+      text-decoration: none;
+    }
+
+    a:hover {
+      text-decoration: underline;
+    }
+
+    .apps-grid, .link-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 1em;
+    }
+
+    .apps-grid a, .link-grid a {
+      background: var(--card);
+      padding: 0.8em;
+      text-align: center;
+      border-radius: 6px;
+    }
+
+    .gallery-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1em;
+    }
+
+    .gallery-grid img {
+      width: 100%;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+
+    .gallery-grid > div {
+      flex: 1 1 30%;
+      background: var(--card);
+      padding: 0.5em;
+      border-radius: 6px;
+    }
+
+    .blog-post {
+      background: var(--card);
+      padding: 1em;
+      border-radius: 6px;
+      margin-bottom: 1em;
+      cursor: pointer;
+    }
+
+    .news-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 1em;
+    }
+
+    .news-card {
+      flex: 1 1 30%;
+      padding: 1em;
+      border-radius: 6px;
+      color: #fff;
+      min-height: 140px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .news-routine { background-color: #2a3c7d; }
+    .news-caution { background-color: #cfae00; color: #000; }
+    .news-danger { background-color: #cc0000; }
+
+    .status-box {
+      background: var(--card);
+      padding: 1em;
+      border-radius: 6px;
+      margin-top: 2em;
+    }
+
+    footer {
+      font-size: 0.9em;
+      color: var(--link);
+      padding: 1em;
+      background: var(--card);
+      text-align: left;
+    }
+
+    @media (max-width: 768px) {
+      .main-layout { flex-direction: column; }
+      .news-card { flex: 1 1 100%; }
+      footer { text-align: center; }
+    }
+  </style>
+</head>
+<body>
+<canvas id="wave-bg"></canvas>
+
+<div class="topbar">
+  <a href="/login">Login</a>&nbsp; |&nbsp;<a href="/register">Register</a>
+</div>
+
+<div class="main-layout">
+  <div class="left-column">
+    <div class="banner">
+      <img src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAwIiBoZWlnaHQ9IjE2MCIgdmlld0JveD0iMCAwIDYwMCAxNjAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+PHJlY3Qgd2lkdGg9IjYwMCIgaGVpZ2h0PSIxNjAiIGZpbGw9IiMwMGYwMDAiLz48dGV4dCB4PSIzMCIgeT0iODAiIGZvbnQtc2l6ZT0iMjRweCIgZmlsbD0iI2ZmZiI+T2ZmR3JpZCBEZXZpY2U8L3RleHQ+PC9zdmc+" alt="Banner" />
+    </div>
+
+    <h2>Welcome to Our Project</h2>
+    <p>Exploring the frontier of embedded connectivity and UI on ESP32.</p>
+
+    <h2>News</h2>
+    <a class="section-link" href="/news/">Read all news →</a>
+    <div class="news-grid">
+      <div class="news-card news-danger">
+        <small>2025-03-10</small>
+        <strong>System Overheating</strong>
+        <p>Temperature exceeded safety limits. Immediate attention required.</p>
+      </div>
+      <div class="news-card news-routine">
+        <small>2025-03-28</small>
+        <strong>Firmware v2 Released</strong>
+        <p>Routine update with minor improvements and stability fixes.</p>
+      </div>
+    </div>
+    
+
+    <h2>Gallery</h2>
+    <a class="section-link" href="/gallery/">Visit the gallery →</a>
+    <div class="gallery-grid">
+      <div><a href="/images/DSC19023.jpg"><img src="/images/thumbs/DSC19023_thumb.jpg" alt="Gallery 1"/></a></div>
+      <div><a href="/images/DSC19024.jpg"><img src="/images/thumbs/DSC19024_thumb.jpg" alt="Gallery 2"/></a></div>
+      <div><a href="/images/DSC19025.jpg"><img src="/images/thumbs/DSC19025_thumb.jpg" alt="Gallery 3"/></a></div>
+    </div>
+
+    <h2>Blog</h2>
+    <a class="section-link" href="/blog/">Visit the blog →</a>
+    <div class="blog-post" onclick="location.href='/blog/offline-first.html'">
+      <strong>ESP32 Goes Offline-First</strong><br/>
+      <small>2025-03-20</small>
+      <p>Building offline-first apps using embedded storage.</p>
+    </div>
+    <div class="blog-post" onclick="location.href='/blog/ui-tiny-screens.html'">
+      <strong>Bringing UI to Tiny Screens</strong><br/>
+      <small>2025-03-10</small>
+      <p>Designing elegant UIs for embedded devices.</p>
+    </div>
+    <div class="blog-post" onclick="location.href='/blog/esp-now-messaging.html'">
+      <strong>ESP-NOW Messaging: A New Era</strong><br/>
+      <small>2025-02-28</small>
+      <p>Power-efficient microcontroller communication.</p>
+    </div>
+  </div>
+
+  <div class="right-column">
+    <h2>Apps</h2>
+    <div class="apps-grid">
+      <a href="/app/chat/">Chat</a>
+      <a href="/app/messages/">Messages</a>
+      <a href="/app/presence/">Presence</a>
+    </div>
+
+    <h2>Links</h2>
+    <div class="link-grid">
+      <a href="/contacts/">Contacts</a>
+      <a href="/blog/">Blog</a>
+      <a href="/downloads/">Downloads</a>
+    </div>
+
+    <h2>Status</h2>
+    <div class="status-box">
+      <p><strong>Uptime:</strong> 3 days, 4 hours</p>
+      <p><strong>Storage:</strong> 12.5 MB used / 32 MB total</p>
+      <p><strong>Media Count:</strong> 42</p>
+      <p><strong>Message Count:</strong> 318</p>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <div>© 2025 OffGrid</div>
+</footer>
+
+<script>
+  const canvas = document.getElementById('wave-bg');
+  const ctx = canvas.getContext('2d');
+  let width, height;
+  let t = 0;
+
+  function resize() {
+    width = canvas.width = window.innerWidth;
+    height = canvas.height = window.innerHeight;
+  }
+
+  window.addEventListener('resize', () => {
+    resize();
+    wavesTop = createWaves(3, height / 3);
+    wavesBottom = createWaves(3, (2 * height) / 3);
+  });
+  resize();
+
+  function createWaves(count, centerY) {
+    return Array.from({ length: count }, () => ({
+      centerY,
+      baseAmp: 40 + Math.random() * 30,
+      baseSpeed: 0.05 + Math.random() * 0.07,
+      freq: 0.001 + Math.random() * 0.0015,
+      offset: Math.random() * 1000,
+      color: "rgba(0,255,0,0.15)"
+    }));
+  }
+
+  let wavesTop = createWaves(3, height / 3);
+  let wavesBottom = createWaves(3, (2 * height) / 3);
+
+  function draw() {
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, width, height);
+
+    const pulse = Math.sin(t * 0.005) * 0.5 + 1;
+
+    for (const wave of [...wavesTop, ...wavesBottom]) {
+      ctx.beginPath();
+      const amp = wave.baseAmp * pulse;
+      const speed = wave.baseSpeed * pulse;
+
+      for (let x = 0; x < width; x++) {
+        const y = wave.centerY + Math.sin((x + wave.offset + t * speed) * wave.freq * 2 * Math.PI) * amp;
+        ctx.lineTo(x, y);
+      }
+
+      ctx.strokeStyle = wave.color;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
+    t += 1;
+    requestAnimationFrame(draw);
+  }
+
+  draw();
+</script>
+
+
+</body>
+</html>
+
