@@ -82,7 +82,7 @@ void initDisplay() {
     lv_obj_align(status_bar, LV_ALIGN_TOP_MID, 0, 0);
 
     status_label = lv_label_create(status_bar);
-    lv_label_set_text(status_label, "ecogram uptime: 00:00:00");
+    lv_label_set_text(status_label, "geogram uptime: 00:00:00");
     lv_obj_set_style_text_font(status_label, &lv_font_montserrat_10, LV_PART_MAIN);
     lv_obj_set_style_text_color(status_label, lv_color_black(), LV_PART_MAIN);
     lv_obj_align(status_label, LV_ALIGN_LEFT_MID, 1, 0);
@@ -141,9 +141,9 @@ void updateDisplay() {
 
         static char buf[64];
         if (days == 0) {
-            snprintf(buf, sizeof(buf), "ecogram uptime: %02u:%02u:%02u", hours, minutes, seconds);
+            snprintf(buf, sizeof(buf), "geogram uptime: %02u:%02u:%02u", hours, minutes, seconds);
         } else {
-            snprintf(buf, sizeof(buf), "ecogram uptime: %lu day%s %02u h",
+            snprintf(buf, sizeof(buf), "geogram uptime: %lu day%s %02u h",
                      days, (days == 1 ? "" : "s"), hours);
         }
         lv_label_set_text(status_label, buf);

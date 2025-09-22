@@ -142,7 +142,7 @@ void setupDisk(){
   sd_init();
   spiffs_init();
   USB.onEvent(usbEventCallback);
-  MSC.vendorID("ecogram");       // max 8 chars
+  MSC.vendorID("geogram");       // max 8 chars
   MSC.productID("USB"); // max 16 chars
   MSC.productRevision("1.0");   // max 4 chars
   MSC.onStartStop(onStartStop);

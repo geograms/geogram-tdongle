@@ -107,7 +107,7 @@ bool StorageManager::begin() {
         Serial.println("Storage: SD card mounted via SDMMC");
 
         USB.onEvent(usbEventCallback);
-        MSC.vendorID("ecogram");
+        MSC.vendorID("geogram");
         MSC.productID("USB");
         MSC.productRevision("1.0");
         MSC.onStartStop(onStartStop);

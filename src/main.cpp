@@ -73,17 +73,13 @@ void setup()
 
     Preferences prefs;
     prefs.begin("config", true);
-    String suffix = prefs.getString("wifi_hotspot_name", "ecogram");
+    String suffix = prefs.getString("wifi_hotspot_name", "geogram");
     prefs.end();
 
     String id = suffix;
-    String beaconName = //"ecogram-" + 
+    String beaconName = //"geogram-" + 
         suffix;
-    /*if(suffix == "ecogram")
-    {
-        id = "ecogram";
-        beaconName = "ecogram";
-    }*/
+   
     String msg = "";
 
     // Generate proper namespace and instance IDs from your suffix

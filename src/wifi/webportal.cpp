@@ -148,7 +148,7 @@
      String wifi_password = prefs.getString("wifi_password", "");
      prefs.end();
  
-     String hotspotSSID = (suffix.length() > 0) ? ("ecogram-" + suffix) : "ecogram";
+     String hotspotSSID = (suffix.length() > 0) ? ("geogram-" + suffix) : "geogram";
  
      WiFi.mode(WIFI_AP_STA);
      WiFi.softAP(hotspotSSID.c_str(), "");

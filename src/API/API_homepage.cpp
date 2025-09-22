@@ -10,7 +10,7 @@ static const std::vector<std::tuple<String, String, String>> introFields = {
 };
 
 static const std::vector<std::tuple<String, String, String>> footerFields = {
-    { "footer_copyright", "Footer copyright text", "(c) 2025 <a href=\"https://ecogram.app\">ecogram</a>" }
+    { "footer_copyright", "Footer copyright text", "(c) 2025 <a href=\"https://geogram.radio\">geogram</a>" }
 };
 
 static const std::vector<std::tuple<String, String, String>> customizationFields = {
