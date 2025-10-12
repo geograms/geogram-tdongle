@@ -1,7 +1,7 @@
 // src/ble/ble.cpp
 // Arduino ESP32 BLE (Kolban) - continuous listening, GATT text TX, and ADV text bursts
-// - ADV bursts carry Service Data starting with ':' and run for a short window (default 100 ms)
-// - Receiver de-duplicates identical addr|payload events seen within a sliding window (default 100 ms)
+// - ADV bursts carry Service Data whose payload begins with '>' (trigger)
+// - Receiver de-duplicates identical addr|payload events within a 2000 ms sliding window
 
 #include "ble.h"
 #include <BLEDevice.h>
@@ -16,21 +16,24 @@ static const uint16_t MSG_UUID_16 = 0xFFF0;   // Service Data UUID used for ADV-
 static const size_t   ADV_TEXT_MAX = 24;      // keep whole ADV ≤ 31 bytes
 
 // ======= ADV-text de-duplication (receiver) =======
-static uint32_t g_adv_dedupe_ms = 100;   // default dedupe window
+static uint32_t g_adv_dedupe_ms = 2000;  // default dedupe window
 struct SeenEntry { String key; uint32_t ts; };
-static SeenEntry g_seen[64];             // small ring buffer
+static SeenEntry g_seen[128];           // small ring buffer
 static uint8_t   g_seen_head = 0;
 
+static inline bool is_adv_text_payload(const std::string& s) {
+  return !s.empty() && (s[0] == '>');
+}
+
 static bool seen_recently(const String& key, uint32_t now_ms) {
-  // purge + check (linear scan over small fixed buffer)
-  for (uint8_t i = 0; i < 64; ++i) {
+  const uint8_t N = (uint8_t)(sizeof(g_seen)/sizeof(g_seen[0]));
+  for (uint8_t i = 0; i < N; ++i) {
     if (g_seen[i].key.length() == 0) continue;
-    if (now_ms - g_seen[i].ts > g_adv_dedupe_ms) { g_seen[i].key = ""; continue; }
+    if ((uint32_t)(now_ms - g_seen[i].ts) > g_adv_dedupe_ms) { g_seen[i].key = ""; continue; }
     if (g_seen[i].key == key) return true;
   }
-  // record
   g_seen[g_seen_head] = { key, now_ms };
-  g_seen_head = (g_seen_head + 1) & 63;
+  g_seen_head = (uint8_t)((g_seen_head + 1) & (N - 1));
   return false;
 }
 
@@ -42,38 +45,21 @@ static bool     g_scanActive = false;
 
 class AdvCb final : public BLEAdvertisedDeviceCallbacks {
   void onResult(BLEAdvertisedDevice d) override {
-    // Fast path: handle our ADV-text first with dedupe
+    // Fast-path: our ADV-text in Service Data
     if (d.haveServiceData()) {
       std::string s = d.getServiceData();
-      if (!s.empty() && s[0] == '>') {
-        String key = d.getAddress().toString().c_str();
-        key += '|';
-        key += String(s.c_str());                 // addr|payload
-
+      if (is_adv_text_payload(s)) {
+        String key = String(s.c_str());           // payload only (ignore MAC)
         if (seen_recently(key, millis())) return; // drop duplicate within window
+
 
         Serial.print("[ADV-TEXT] ");
         for (char c : s) Serial.printf("%c", isprint((unsigned char)c) ? c : '.');
         Serial.printf("  rssi=%d  from=%s\n", d.getRSSI(), d.getAddress().toString().c_str());
-        return; // processed
+        return; // handled
       }
     }
 
-    // Optional: minimal log for other ads (comment out if noisy)
-    /*
-    Serial.printf("[ADV] addr=%s rssi=%d",
-                  d.getAddress().toString().c_str(), d.getRSSI());
-    if (d.haveName())     Serial.printf(" name=\"%s\"", d.getName().c_str());
-    if (d.haveTXPower())  Serial.printf(" tx=%d", d.getTXPower());
-    if (d.haveServiceUUID()) {
-      Serial.print(" svc="); Serial.print(d.getServiceUUID().toString().c_str());
-    }
-    if (d.haveServiceData()) {
-      std::string s = d.getServiceData();
-      Serial.printf(" svcdata_len=%u", (unsigned)s.size());
-    }
-    Serial.println();
-    */
   }
 };
 
@@ -85,8 +71,8 @@ void ble_start_listening(bool wantsDuplicates) {
   if (!g_scan) {
     g_scan = BLEDevice::getScan();
     static AdvCb cb;
-    g_scan->setAdvertisedDeviceCallbacks(&cb, wantsDuplicates);
-    g_scan->setActiveScan(true);   // request scan responses
+    g_scan->setAdvertisedDeviceCallbacks(&cb, wantsDuplicates); // keep true; dedupe handles repeats
+    g_scan->setActiveScan(true);
     g_scan->setInterval(80);
     g_scan->setWindow(60);
   }
@@ -167,29 +153,25 @@ int ble_send_text(const uint8_t* data, size_t len, bool pauseDuringSend) {
   return total;
 }
 
-// ======= Advertisement text burst (':'-prefixed) =======
-// Compose a Service Data (0x16) AD field with 16-bit UUID MSG_UUID_16 and a payload that starts with ':'
-// Advertise it for duration_ms (default 100 ms), then stop.
-// If a GATT service was advertising, resume it afterwards.
+// ======= Advertisement text burst ('>'-prefixed) =======
+// Compose a Service Data (0x16) AD field with 16-bit UUID MSG_UUID_16 and a payload that starts with '>'
+// Advertise it for duration_ms, then stop. If a GATT service was advertising, resume it afterwards.
 void ble_send_adv_text_burst(const String& text, uint32_t duration_ms) {
   BLEAdvertising* adv = BLEDevice::getAdvertising();
 
-  // Build payload starting with ':'
+  // Build payload starting with '>'
   std::string payload = text.c_str();
-  if (payload.empty() || payload[0] != ':') payload.insert(payload.begin(), ':');
+  if (payload.empty() || payload[0] != '>') payload.insert(payload.begin(), '>');
   if (payload.size() > ADV_TEXT_MAX) payload.resize(ADV_TEXT_MAX);
 
   // Prepare ADV data: Flags + Service Data (UUID 0xFFF0)
   BLEAdvertisementData advData;
   advData.setFlags(0x06); // General Discoverable, BR/EDR not supported
+  BLEAdvertisementData scanResp; // empty scan response
   advData.setServiceData(BLEUUID((uint16_t)MSG_UUID_16), payload);
 
-  BLEAdvertisementData scanResp; // empty scan response
-
-  // If a GATT server is advertising, remember so we can restore it
   const bool hadGattAdv = (g_server != nullptr);
 
-  // Run burst
   adv->stop();
   adv->setAdvertisementData(advData);
   adv->setScanResponseData(scanResp);
@@ -199,7 +181,6 @@ void ble_send_adv_text_burst(const String& text, uint32_t duration_ms) {
 
   adv->stop();
 
-  // Restore previous GATT advertising (if any)
   if (hadGattAdv) {
     BLEAdvertising* a = g_server->getAdvertising();
     a->addServiceUUID(SVC_UUID);
