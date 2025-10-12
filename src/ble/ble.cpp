@@ -1,126 +1,209 @@
-#include <Arduino.h>
+// src/ble/ble.cpp
+// Arduino ESP32 BLE (Kolban) - continuous listening, GATT text TX, and ADV text bursts
+// - ADV bursts carry Service Data starting with ':' and run for a short window (default 100 ms)
+// - Receiver de-duplicates identical addr|payload events seen within a sliding window (default 100 ms)
+
+#include "ble.h"
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEAdvertising.h>
 #include <BLEScan.h>
-#include <TFT_eSPI.h>
-#include <Preferences.h>
-#include "apps/presence.h"
-#include "wifi/time_get.h"
+#include <BLEServer.h>
+#include <BLE2902.h>
 
-extern TFT_eSPI screen;
+// ======= Config / constants =======
+static const uint16_t MSG_UUID_16 = 0xFFF0;   // Service Data UUID used for ADV-text
+static const size_t   ADV_TEXT_MAX = 24;      // keep whole ADV ≤ 31 bytes
 
-// Persistent advertising object
-static BLEAdvertising* adv = nullptr;
-static BLEAdvertisementData advData;
-static BLEAdvertisementData scanResponseData;
+// ======= ADV-text de-duplication (receiver) =======
+static uint32_t g_adv_dedupe_ms = 100;   // default dedupe window
+struct SeenEntry { String key; uint32_t ts; };
+static SeenEntry g_seen[64];             // small ring buffer
+static uint8_t   g_seen_head = 0;
 
-void scanNearbyEddystoneUIDs() {
-    BLEScan* scanner = BLEDevice::getScan();
-    scanner->setActiveScan(true);
-    scanner->setInterval(100);
-    scanner->setWindow(99);
-
-    BLEScanResults results = scanner->start(5, false); // 5 seconds scan
-    int count = results.getCount();
-
-    Serial.printf("Found %d BLE devices\n", count);
-    int eddystoneCount = 0;
-
-    for (int i = 0; i < count; ++i) {
-        BLEAdvertisedDevice d = results.getDevice(i);
-        if (d.haveServiceData()) {
-            std::string data = d.getServiceData();
-            if (d.haveServiceUUID() && d.getServiceUUID().toString() == "0000feaa-0000-1000-8000-00805f9b34fb") {
-                uint8_t frameType = data[0];
-                if (frameType == 0x00 && data.length() >= 18) { // UID frame
-                    eddystoneCount++;
-                    Serial.println("Eddystone UID found:");
-                    Serial.print("  Namespace ID: ");
-                    char deviceId[21] = {0}; // 10 bytes x 2 + null
-                    for (int j = 2; j < 12; ++j) {
-                        Serial.printf("%02X", (uint8_t)data[j]);
-                        sprintf(&deviceId[(j - 2) * 2], "%02X", (uint8_t)data[j]);
-                    }
-
-                    Serial.print("\n  Instance ID: ");
-                    for (int j = 12; j < 18; ++j) {
-                        Serial.printf("%02X", (uint8_t)data[j]);
-                    }
-                    Serial.println();
-
-                    updatePresence(String(deviceId), getCurrentTimestamp());
-                }
-            }
-        }
-    }
-
-    Preferences prefs;
-    prefs.begin("stats", false);
-    prefs.putInt("users_detected", eddystoneCount);
-    prefs.end();
-    Serial.printf("[BLE] Eddystone devices detected: %d\n", eddystoneCount);
-
-    scanner->clearResults();
+static bool seen_recently(const String& key, uint32_t now_ms) {
+  // purge + check (linear scan over small fixed buffer)
+  for (uint8_t i = 0; i < 64; ++i) {
+    if (g_seen[i].key.length() == 0) continue;
+    if (now_ms - g_seen[i].ts > g_adv_dedupe_ms) { g_seen[i].key = ""; continue; }
+    if (g_seen[i].key == key) return true;
+  }
+  // record
+  g_seen[g_seen_head] = { key, now_ms };
+  g_seen_head = (g_seen_head + 1) & 63;
+  return false;
 }
 
-void startBeacon(const char* beaconName, const char* namespaceId, const char* instanceId) {
-    BLEDevice::init(beaconName);
-    adv = BLEDevice::getAdvertising();
-    
-    // Create proper Eddystone UID frame
-    std::string serviceData;
-    serviceData += (char)0x00; // Eddystone UID frame type
-    serviceData += (char)0xBA; // Calibrated TX power @ 0m (-70 dBm typical)
+void ble_set_adv_dedupe_window_ms(uint32_t ms) { g_adv_dedupe_ms = ms; }
 
-    // Convert hex namespace ID to bytes (10 bytes)
-    for (int i = 0; i < 20; i += 2) {
-        std::string byteStr = std::string(namespaceId + i, 2);
-        char byte = (char)strtoul(byteStr.c_str(), NULL, 16);
-        serviceData += byte;
-    }
-    
-    // Convert hex instance ID to bytes (6 bytes)
-    for (int i = 0; i < 12; i += 2) {
-        std::string byteStr = std::string(instanceId + i, 2);
-        char byte = (char)strtoul(byteStr.c_str(), NULL, 16);
-        serviceData += byte;
-    }
-    
-    // Add 2 bytes Reserved For Future Use (RFU) — must be zero
-    serviceData += (char)0x00;
-    serviceData += (char)0x00;
+// ======= Scan / listen =======
+static BLEScan* g_scan = nullptr;
+static bool     g_scanActive = false;
 
-    // Configure advertisement data
-    advData = BLEAdvertisementData();
-    advData.setFlags(0x06); // General discoverable, no BR/EDR
-    advData.setServiceData(BLEUUID((uint16_t)0xFEAA), serviceData);
-    
-    // Configure scan response data
-    scanResponseData = BLEAdvertisementData();
-    scanResponseData.setName(beaconName);
-    
-    // Set advertising data
-    adv->setAdvertisementData(advData);
-    adv->setScanResponseData(scanResponseData);
-    
-    // Add service UUID to advertising
-    adv->addServiceUUID(BLEUUID((uint16_t)0xFEAA));
-    
-    // Start advertising
-    adv->start();
-    
-    Serial.println("Eddystone Beacon started successfully");
+class AdvCb final : public BLEAdvertisedDeviceCallbacks {
+  void onResult(BLEAdvertisedDevice d) override {
+    // Fast path: handle our ADV-text first with dedupe
+    if (d.haveServiceData()) {
+      std::string s = d.getServiceData();
+      if (!s.empty() && s[0] == '>') {
+        String key = d.getAddress().toString().c_str();
+        key += '|';
+        key += String(s.c_str());                 // addr|payload
+
+        if (seen_recently(key, millis())) return; // drop duplicate within window
+
+        Serial.print("[ADV-TEXT] ");
+        for (char c : s) Serial.printf("%c", isprint((unsigned char)c) ? c : '.');
+        Serial.printf("  rssi=%d  from=%s\n", d.getRSSI(), d.getAddress().toString().c_str());
+        return; // processed
+      }
+    }
+
+    // Optional: minimal log for other ads (comment out if noisy)
+    /*
+    Serial.printf("[ADV] addr=%s rssi=%d",
+                  d.getAddress().toString().c_str(), d.getRSSI());
+    if (d.haveName())     Serial.printf(" name=\"%s\"", d.getName().c_str());
+    if (d.haveTXPower())  Serial.printf(" tx=%d", d.getTXPower());
+    if (d.haveServiceUUID()) {
+      Serial.print(" svc="); Serial.print(d.getServiceUUID().toString().c_str());
+    }
+    if (d.haveServiceData()) {
+      std::string s = d.getServiceData();
+      Serial.printf(" svcdata_len=%u", (unsigned)s.size());
+    }
+    Serial.println();
+    */
+  }
+};
+
+void ble_init(const char* devName) {
+  BLEDevice::init(devName && *devName ? devName : "ESP32");
 }
 
+void ble_start_listening(bool wantsDuplicates) {
+  if (!g_scan) {
+    g_scan = BLEDevice::getScan();
+    static AdvCb cb;
+    g_scan->setAdvertisedDeviceCallbacks(&cb, wantsDuplicates);
+    g_scan->setActiveScan(true);   // request scan responses
+    g_scan->setInterval(80);
+    g_scan->setWindow(60);
+  }
+  if (!g_scanActive) {
+    g_scan->start(0, nullptr, false); // continuous until stopped
+    g_scanActive = true;
+    Serial.println("[BLE] Listening (continuous scan) started");
+  }
+}
 
+void ble_stop_listening() {
+  if (g_scan && g_scanActive) {
+    g_scan->stop();
+    g_scanActive = false;
+    Serial.println("[BLE] Listening stopped");
+  }
+}
 
-void restartBeacon() {
-    if (adv) {
-        adv->stop();
-        delay(10);
-        scanNearbyEddystoneUIDs();
-        delay(10);
-        adv->start();
-    }
+bool ble_is_listening() { return g_scanActive; }
+
+// ======= GATT text TX (notify) =======
+static BLEServer*         g_server  = nullptr;
+static BLEService*        g_service = nullptr;
+static BLECharacteristic* g_tx      = nullptr;
+
+static BLEUUID SVC_UUID("6E400001-B5A3-F393-E0A9-E50E24DCCA9E"); // NUS-like
+static BLEUUID TX_UUID ("6E400003-B5A3-F393-E0A9-E50E24DCCA9E"); // notify
+
+class ServerCB : public BLEServerCallbacks {
+  void onConnect(BLEServer* s, esp_ble_gatts_cb_param_t* param) override {
+    Serial.printf("[GATT] Central connected (conn_id=%u)\n", param->connect.conn_id);
+  }
+  void onDisconnect(BLEServer* s) override {
+    Serial.println("[GATT] Central disconnected; advertising again");
+    s->getAdvertising()->start();
+  }
+};
+
+void ble_start_tx(const char* devName) {
+  BLEDevice::init(devName && *devName ? devName : "ESP32");
+  if (g_server) return;
+
+  g_server = BLEDevice::createServer();
+  static ServerCB scb; g_server->setCallbacks(&scb);
+
+  g_service = g_server->createService(SVC_UUID);
+  g_tx = g_service->createCharacteristic(
+           TX_UUID, BLECharacteristic::PROPERTY_NOTIFY | BLECharacteristic::PROPERTY_READ);
+  auto* cccd = new BLE2902(); cccd->setNotifications(true); g_tx->addDescriptor(cccd);
+
+  g_service->start();
+  BLEAdvertising* a = g_server->getAdvertising();
+  a->addServiceUUID(SVC_UUID);
+  a->setScanResponse(true);
+  a->start();
+
+  BLEDevice::setMTU(247); // request larger MTU (peer decides)
+  Serial.println("[GATT] TX service advertising");
+}
+
+int ble_send_text(const uint8_t* data, size_t len, bool pauseDuringSend) {
+  if (!g_tx) { Serial.println("[GATT] TX not ready. Call ble_start_tx() first."); return 0; }
+
+  bool resume = false;
+  if (pauseDuringSend && ble_is_listening()) { ble_stop_listening(); resume = true; }
+
+  const size_t maxChunk = 20; // safe for default MTU=23
+  int total = 0;
+  for (size_t off = 0; off < len; off += maxChunk) {
+    size_t n = (len - off < maxChunk) ? (len - off) : maxChunk;
+    g_tx->setValue((uint8_t*)(data + off), n);
+    g_tx->notify();
+    total += (int)n;
+    delay(5);
+  }
+
+  if (resume) ble_start_listening(true);
+  return total;
+}
+
+// ======= Advertisement text burst (':'-prefixed) =======
+// Compose a Service Data (0x16) AD field with 16-bit UUID MSG_UUID_16 and a payload that starts with ':'
+// Advertise it for duration_ms (default 100 ms), then stop.
+// If a GATT service was advertising, resume it afterwards.
+void ble_send_adv_text_burst(const String& text, uint32_t duration_ms) {
+  BLEAdvertising* adv = BLEDevice::getAdvertising();
+
+  // Build payload starting with ':'
+  std::string payload = text.c_str();
+  if (payload.empty() || payload[0] != ':') payload.insert(payload.begin(), ':');
+  if (payload.size() > ADV_TEXT_MAX) payload.resize(ADV_TEXT_MAX);
+
+  // Prepare ADV data: Flags + Service Data (UUID 0xFFF0)
+  BLEAdvertisementData advData;
+  advData.setFlags(0x06); // General Discoverable, BR/EDR not supported
+  advData.setServiceData(BLEUUID((uint16_t)MSG_UUID_16), payload);
+
+  BLEAdvertisementData scanResp; // empty scan response
+
+  // If a GATT server is advertising, remember so we can restore it
+  const bool hadGattAdv = (g_server != nullptr);
+
+  // Run burst
+  adv->stop();
+  adv->setAdvertisementData(advData);
+  adv->setScanResponseData(scanResp);
+  adv->start();
+
+  delay(duration_ms);
+
+  adv->stop();
+
+  // Restore previous GATT advertising (if any)
+  if (hadGattAdv) {
+    BLEAdvertising* a = g_server->getAdvertising();
+    a->addServiceUUID(SVC_UUID);
+    a->setScanResponse(true);
+    a->start();
+  }
 }

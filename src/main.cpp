@@ -86,7 +86,7 @@ void setup()
     String namespaceId = "0000000000"; // 10-byte namespace (adjust as needed)
     String instanceId = "000001";      // 6-byte instance (adjust as needed)
 
-    startBeacon(beaconName.c_str(), namespaceId.c_str(), instanceId.c_str());
+    //startBeacon(beaconName.c_str(), namespaceId.c_str(), instanceId.c_str());
 
     initTime();
 
@@ -94,6 +94,10 @@ void setup()
     lastRestart = millis();
 
     generateInspiration();
+
+    ble_init("ESP32");
+    ble_start_listening(true);
+
 }
 
 void loop()
@@ -103,9 +107,12 @@ void loop()
     updateTime();
     delay(5);
 
+    /*
     if (millis() - lastRestart > restartInterval)
     {
         restartBeacon();
         lastRestart = millis();
     }
+    */
+
 }
