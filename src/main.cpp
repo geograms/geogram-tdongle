@@ -95,7 +95,7 @@ void setup()
 
     generateInspiration();
 
-    ble_init("ESP32");
+    ble_init("ESP32-TDongle");
     ble_start_listening(true);
 
 }
@@ -103,6 +103,7 @@ void setup()
 void loop()
 {
     button.tick();
+    ble_tick(); 
     updateDisplay();
     updateTime();
     delay(5);
