@@ -3,7 +3,7 @@
 
 #include <Arduino.h>
 #include <string.h>
-#include <new>                 // placement new
+#include <new>
 #include <stdarg.h>
 
 #include <BLEDevice.h>
@@ -13,29 +13,29 @@
 
 #include "bluetoothmessage.h"
 
-// Forward weak hook (may be undefined in the app); ALWAYS guard before calling.
+// Weak legacy hook; guard before calling.
 extern "C" void messageCompleted(const BluetoothMessage& msg) __attribute__((weak));
 
 // ---------- Tunables ----------
-static const uint16_t MSG_UUID_16 = 0xFFF0;   // Service Data UUID for ADV text
+static const uint16_t MSG_UUID_16 = 0xFFF0;
 
 #ifndef ADV_TEXT_MAX
-#define ADV_TEXT_MAX 24                        // keep whole ADV ≤ 31 bytes
+#define ADV_TEXT_MAX 24
 #endif
 #ifndef DEDUP_WINDOW_MS
-#define DEDUP_WINDOW_MS 2000                   // 2s dedupe window
+#define DEDUP_WINDOW_MS 2000
 #endif
 #ifndef MIN_SINGLE_LEN
-#define MIN_SINGLE_LEN 5                       // minimum length after '>'
+#define MIN_SINGLE_LEN 5
 #endif
 #ifndef INFLIGHT_TTL_MS
-#define INFLIGHT_TTL_MS (10UL * 60UL * 1000UL) // 10 minutes assembler timeout
+#define INFLIGHT_TTL_MS (10UL * 60UL * 1000UL)
 #endif
 #ifndef BLE_EVT_QUEUE_DEPTH
-#define BLE_EVT_QUEUE_DEPTH 32                 // ring depth (events)
+#define BLE_EVT_QUEUE_DEPTH 32
 #endif
 #ifndef BLE_EVT_DELIVER_BUDGET
-#define BLE_EVT_DELIVER_BUDGET 12              // max events per ble_tick() call
+#define BLE_EVT_DELIVER_BUDGET 12
 #endif
 
 // ---------- Optional logger ----------
@@ -50,11 +50,49 @@ static void logf(const char* fmt, ...) {
   g_logger(buf);
 }
 
-// ---------- Small utils ----------
-static inline bool is_printable_ascii(const char* p, size_t n) {
-  for (size_t i = 0; i < n; ++i) {
-    unsigned char c = (unsigned char)p[i];
-    if (c < 32 || c > 126) return false;
+// ---------- UTF-8 validator (allows emojis) ----------
+static inline bool is_valid_utf8_line(const char* p, size_t n) {
+  const uint8_t* s = (const uint8_t*)p;
+  size_t i = 0;
+  while (i < n) {
+    uint8_t c = s[i];
+
+    // Disallow control chars (C0 + DEL) and NUL/CR/LF/TAB
+    if (c < 0x20 || c == 0x7F) return false;
+
+    // ASCII
+    if (c < 0x80) { ++i; continue; }
+
+    // 2-byte
+    if ((c & 0xE0) == 0xC0) {
+      if (i + 1 >= n) return false;
+      uint8_t c1 = s[i+1];
+      if ((c1 & 0xC0) != 0x80) return false;
+      uint32_t cp = ((c & 0x1F) << 6) | (c1 & 0x3F);
+      if (cp < 0x80) return false; // overlong
+      i += 2; continue;
+    }
+    // 3-byte
+    if ((c & 0xF0) == 0xE0) {
+      if (i + 2 >= n) return false;
+      uint8_t c1 = s[i+1], c2 = s[i+2];
+      if (((c1 | c2) & 0xC0) != 0x80) return false;
+      uint32_t cp = ((c & 0x0F) << 12) | ((c1 & 0x3F) << 6) | (c2 & 0x3F);
+      if (cp < 0x800) return false;                 // overlong
+      if (cp >= 0xD800 && cp <= 0xDFFF) return false; // surrogates
+      i += 3; continue;
+    }
+    // 4-byte
+    if ((c & 0xF8) == 0xF0) {
+      if (i + 3 >= n) return false;
+      uint8_t c1 = s[i+1], c2 = s[i+2], c3 = s[i+3];
+      if (((c1 | c2 | c3) & 0xC0) != 0x80) return false;
+      uint32_t cp = ((c & 0x07) << 18) | ((c1 & 0x3F) << 12) |
+                    ((c2 & 0x3F) << 6)  | (c3 & 0x3F);
+      if (cp < 0x10000 || cp > 0x10FFFF) return false; // overlong/out-of-range
+      i += 4; continue;
+    }
+    return false; // invalid leading byte
   }
   return true;
 }
@@ -87,7 +125,7 @@ static bool seen_recently_payload(const String& key, uint32_t now_ms) {
   return false;
 }
 
-// ---------- In-flight assembler (AA..ZZ → 26*26) ----------
+// ---------- In-flight assembler ----------
 struct Inflight {
   BluetoothMessage bm;
   uint32_t lastTouchMs = 0;
@@ -101,7 +139,6 @@ static inline int inflight_index_2(const char* id2) {
 }
 
 static void inflight_reset(Inflight& slot) {
-  // Properly destroy then placement-new to avoid leaks/heap corruption.
   slot.bm.~BluetoothMessage();
   new (&slot.bm) BluetoothMessage();
   slot.lastTouchMs = 0;
@@ -116,13 +153,13 @@ static void inflight_sweep(uint32_t now) {
   }
 }
 
-// ---------- Event bus (ring + subscribers) ----------
+// ---------- Event bus ----------
 #include "freertos/FreeRTOS.h"
 #include "freertos/portmacro.h"
 
 static BleEvent g_evt_q[BLE_EVT_QUEUE_DEPTH];
-static volatile uint16_t g_evt_head = 0; // write index
-static volatile uint16_t g_evt_tail = 0; // read index
+static volatile uint16_t g_evt_head = 0;
+static volatile uint16_t g_evt_tail = 0;
 static uint32_t g_evt_dropped = 0;
 
 static portMUX_TYPE g_evt_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -133,12 +170,8 @@ static inline bool q_empty(){ return g_evt_head == g_evt_tail; }
 
 static void q_push(const BleEvent* e) {
   portENTER_CRITICAL(&g_evt_mux);
-  if (q_full()) {
-    // drop oldest
-    g_evt_tail = Q_NEXT(g_evt_tail);
-    ++g_evt_dropped;
-  }
-  g_evt_q[g_evt_head] = *e;  // POD copy
+  if (q_full()) { g_evt_tail = Q_NEXT(g_evt_tail); ++g_evt_dropped; }
+  g_evt_q[g_evt_head] = *e;
   g_evt_head = Q_NEXT(g_evt_head);
   portEXIT_CRITICAL(&g_evt_mux);
 }
@@ -146,11 +179,7 @@ static void q_push(const BleEvent* e) {
 static bool q_pop(BleEvent* out) {
   bool ok = false;
   portENTER_CRITICAL(&g_evt_mux);
-  if (!q_empty()) {
-    *out = g_evt_q[g_evt_tail];
-    g_evt_tail = Q_NEXT(g_evt_tail);
-    ok = true;
-  }
+  if (!q_empty()) { *out = g_evt_q[g_evt_tail]; g_evt_tail = Q_NEXT(g_evt_tail); ok = true; }
   portEXIT_CRITICAL(&g_evt_mux);
   return ok;
 }
@@ -165,42 +194,28 @@ static Sub g_subs[BLE_MAX_SUBSCRIBERS];
 int ble_subscribe(BleEventCb cb, void* user_ctx) {
   if (!cb) return 0;
   for (int i = 0; i < BLE_MAX_SUBSCRIBERS; ++i) {
-    if (!g_subs[i].used) {
-      g_subs[i].cb = cb;
-      g_subs[i].ctx = user_ctx;
-      g_subs[i].used = 1;
-      return i + 1; // token
-    }
+    if (!g_subs[i].used) { g_subs[i] = { cb, user_ctx, 1 }; return i + 1; }
   }
   return 0;
 }
 
 static inline void mac_to_bytes(const BLEAddress& addr, uint8_t out[6]) {
-  BLEAddress tmp = addr;                 // getNative() is non-const
-  esp_bd_addr_t* native = tmp.getNative();  // uint8_t[6]
+  BLEAddress tmp = addr;
+  esp_bd_addr_t* native = tmp.getNative();
   memcpy(out, native, 6);
 }
 
 void ble_unsubscribe(int token) {
   if (token <= 0) return;
   int idx = token - 1;
-  if (idx >= 0 && idx < BLE_MAX_SUBSCRIBERS) {
-    g_subs[idx].used = 0;
-    g_subs[idx].cb = nullptr;
-    g_subs[idx].ctx = nullptr;
-  }
+  if ((unsigned)idx < BLE_MAX_SUBSCRIBERS) g_subs[idx] = { nullptr, nullptr, 0 };
 }
 
 void ble_tick(void) {
-  // Deliver up to BLE_EVT_DELIVER_BUDGET events per call
-  BleEvent e;
-  int budget = BLE_EVT_DELIVER_BUDGET;
+  BleEvent e; int budget = BLE_EVT_DELIVER_BUDGET;
   while (budget-- > 0 && q_pop(&e)) {
-    for (int i = 0; i < BLE_MAX_SUBSCRIBERS; ++i) {
-      if (g_subs[i].used && g_subs[i].cb) {
-        g_subs[i].cb(&e, g_subs[i].ctx);
-      }
-    }
+    for (int i = 0; i < BLE_MAX_SUBSCRIBERS; ++i)
+      if (g_subs[i].used && g_subs[i].cb) g_subs[i].cb(&e, g_subs[i].ctx);
   }
 }
 
@@ -213,7 +228,7 @@ class AdvCb final : public BLEAdvertisedDeviceCallbacks {
     if (!d.haveServiceData()) return;
 
     std::string sd = d.getServiceData();
-    if (sd.empty() || sd[0] != '>') return;  // must start with '>'
+    if (sd.empty() || sd[0] != '>') return;
 
     const char* bytes = sd.data();
     size_t total = sd.size();
@@ -222,16 +237,17 @@ class AdvCb final : public BLEAdvertisedDeviceCallbacks {
     const char* content = bytes + 1;
     size_t      clen    = total - 1;
 
-    if (!is_printable_ascii(content, clen)) return;
+    // ✅ Allow emojis: accept only valid UTF-8, reject control bytes and malformed sequences
+    if (!is_valid_utf8_line(content, clen)) return;
     if ((int)clen < MIN_SINGLE_LEN) return;
 
     uint32_t now = millis();
 
     // Dedup by payload only (ignore MAC)
-    String payload = String(sd.c_str()); // '>' + text
+    String payload = String(sd.c_str()); // includes leading '>'
     if (seen_recently_payload(payload, now)) return;
 
-    // Console echo: single-line '>' text seen
+    // Console echo: single-line '>' text seen (may include emoji UTF-8)
     Serial.print("[ADV-TEXT] ");
     Serial.print(payload);
     Serial.print("  rssi=");
@@ -242,7 +258,6 @@ class AdvCb final : public BLEAdvertisedDeviceCallbacks {
     // Post SINGLE_TEXT event
     BleEvent ev = {};
     ev.type = BLE_EVT_SINGLE_TEXT;
-    // copy text (payload including leading '>')
     size_t copyN = (payload.length() < (BLE_EVT_MAX_TEXT - 1)) ? payload.length() : (BLE_EVT_MAX_TEXT - 1);
     memcpy(ev.data.single.text, payload.c_str(), copyN);
     ev.data.single.text[copyN] = '\0';
@@ -253,35 +268,28 @@ class AdvCb final : public BLEAdvertisedDeviceCallbacks {
 
     // If looks like parcel, feed assembler
     if (is_parcel_like(content, clen)) {
-      // id2 = first two chars
       int idx = inflight_index_2(content);
       if (idx >= 0) {
         Inflight &slot = g_inflight[idx];
-        // body as Arduino String for BluetoothMessage API
         String body = String(content);  // "AA<digits>:..."
         slot.bm.addMessageParcel(body);
         slot.lastTouchMs = now;
         if (slot.bm.isMessageCompleted()) {
-          // Compose MESSAGE_DONE event with truncated fields
           BleEvent ev2 = {};
           ev2.type = BLE_EVT_MESSAGE_DONE;
-          // id 2-chars
+
           ev2.data.done.id[0] = content[0];
           ev2.data.done.id[1] = content[1];
           ev2.data.done.id[2] = '\0';
-          // from/to/checksum/message
+
           String from = slot.bm.getIdFromSender();
           String to   = slot.bm.getIdDestination();
           String ck   = slot.bm.getChecksum();
           String msg  = slot.bm.getMessage();
 
-          // Print the completed message to the serial console
-          Serial.print('[');
-          Serial.print(from);
-          Serial.print("] ");
-          Serial.println(msg);
+          // Print the completed message (may include emoji)
+          Serial.print('['); Serial.print(from); Serial.print("] "); Serial.println(msg);
 
-          // Truncate safely into event payload
           strncpy(ev2.data.done.from, from.c_str(), sizeof(ev2.data.done.from)-1);
           ev2.data.done.from[sizeof(ev2.data.done.from)-1] = '\0';
           strncpy(ev2.data.done.to, to.c_str(), sizeof(ev2.data.done.to)-1);
@@ -296,18 +304,12 @@ class AdvCb final : public BLEAdvertisedDeviceCallbacks {
 
           q_push(&ev2);
 
-          // Legacy weak hook (optional) — only call if it's actually linked
-          if (messageCompleted) {
-            messageCompleted(slot.bm);
-          }
-
-          // Clear slot (properly resets internal Strings)
+          if (messageCompleted) messageCompleted(slot.bm);
           inflight_reset(slot);
         }
       }
     }
 
-    // Maintenance
     inflight_sweep(now);
   }
 };
@@ -326,7 +328,6 @@ void ble_start_listening(bool wantsDuplicates) {
     g_scan->setWindow(60);
   }
   if (!g_scanActive) {
-    // Continuous, non-blocking scan (Kolban BLE)
     g_scan->start(0, nullptr, false);
     g_scanActive = true;
     log_line("[BLE] Listening (continuous scan) started");
@@ -352,8 +353,8 @@ static void adv_send_text_burst(const String& text, uint32_t duration_ms) {
   if (payload.size() > ADV_TEXT_MAX) payload.resize(ADV_TEXT_MAX);
 
   BLEAdvertisementData advData;
-  advData.setFlags(0x06); // General Discoverable, BR/EDR not supported
-  BLEAdvertisementData scanResp; // empty
+  advData.setFlags(0x06);
+  BLEAdvertisementData scanResp;
   advData.setServiceData(BLEUUID((uint16_t)MSG_UUID_16), payload);
 
   adv->stop();
@@ -375,7 +376,7 @@ int ble_send_text(const uint8_t* data, size_t len, bool pauseDuringSend) {
   String txt; txt.reserve(len + 1); txt += '>';
   for (size_t i = 0; i < len; ++i) txt += (char)data[i];
 
-  adv_send_text_burst(txt, 100); // ~100 ms
+  adv_send_text_burst(txt, 100);
 
   if (resume) ble_start_listening(true);
   return (int)len;
