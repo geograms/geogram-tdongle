@@ -74,5 +74,5 @@ void generateInspiration() {
     message += topics[random(topicCount)];
     message += endings[random(endingCount)];
 
-    writeLog(message.c_str());
+    //writeLog(message.c_str());
 }

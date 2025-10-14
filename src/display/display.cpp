@@ -4,54 +4,52 @@
 #include <Preferences.h>
 #include "lv_driver.h"
 #include "misc/pinconfig.h"
-#include "inspiration.h"
+
+// BLE event interface (loose coupling)
+#include "ble/ble.h"
 
 TFT_eSPI screen = TFT_eSPI();
+
 static lv_obj_t* status_label = nullptr;
-static lv_obj_t* log_box = nullptr;
 static lv_obj_t* ip_label = nullptr;
 static lv_obj_t* device_count_label = nullptr;
-static String log_lines[1000];
-static uint16_t log_index = 0;
+static lv_obj_t* msg_container = nullptr;
+static lv_obj_t* msg_label = nullptr;
 
-void writeLog(const char* line) {
-    if (strncmp(line, "Remember:", 9) != 0 &&
-        strncmp(line, "Stay alert:", 11) != 0 &&
-        strncmp(line, "Off the grid:", 13) != 0 &&
-        strncmp(line, "Pro tip:", 8) != 0 &&
-        strncmp(line, "Don't forget:", 13) != 0 &&
-        strncmp(line, "In silence:", 11) != 0 &&
-        strncmp(line, "Your system:", 13) != 0 &&
-        strncmp(line, "Legacy fades:", 14) != 0 &&
-        strncmp(line, "Think different:", 16) != 0 &&
-        strncmp(line, "Trust yourself:", 16) != 0) {
-        Serial.println(line);
-    }
+// ------- last message buffer (updated by BLE events, applied in updateDisplay) -------
+static char s_last_msg[512];          // fixed buffer to avoid heap churn
+static volatile bool s_msg_dirty = false;
 
-    if (log_index >= 1000) {
-        for (int i = 1; i < 1000; ++i) {
-            log_lines[i - 1] = log_lines[i];
+// ---------------- BLE event → store last message (no LVGL calls here) ----------------
+static void on_ble_event(const BleEvent* e, void* /*ctx*/) {
+    if (!e) return;
+
+    switch (e->type) {
+        case BLE_EVT_MESSAGE_DONE: {
+            const char* from     = e->data.done.from;
+            const char* snippet  = e->data.done.snippet;
+            const uint32_t mlen  = e->data.done.msg_len;
+
+            const char* from_s = (from && from[0]) ? from : "---";
+            const char* snip_s = snippet ? snippet : "";
+
+            bool truncated = (mlen > strlen(snip_s));
+            // Build "FROM: message…" into s_last_msg safely
+            if (truncated) {
+                snprintf(s_last_msg, sizeof(s_last_msg), "%s: %s…", from_s, snip_s);
+            } else {
+                snprintf(s_last_msg, sizeof(s_last_msg), "%s: %s", from_s, snip_s);
+            }
+            s_msg_dirty = true;
+            break;
         }
-        log_index = 999;
+        default:
+            // We only display completed messages here.
+            break;
     }
-
-    log_lines[log_index++] = line;
-
-    String content;
-    for (int i = 0; i < log_index; ++i) {
-        content += log_lines[i];
-        if (i != log_index - 1) content += "\n";
-    }
-
-    lv_textarea_set_text(log_box, content.c_str());
-    lv_textarea_set_cursor_pos(log_box, LV_TEXTAREA_CURSOR_LAST);
 }
 
-void clearLog() {
-    log_index = 0;
-    lv_textarea_set_text(log_box, "");
-}
-
+// ---------------- UI init/update ----------------
 void initDisplay() {
     screen.init();
     screen.setRotation(1);
@@ -63,6 +61,7 @@ void initDisplay() {
     screen.setTextColor(TFT_GREEN, TFT_BLACK);
     delay(1000);
 
+    // Serial may already be started in main; keeping this is harmless
     Serial.begin(115200);
 
     lvgl_init();
@@ -74,6 +73,7 @@ void initDisplay() {
                                              &lv_font_montserrat_10);
     lv_disp_set_theme(nullptr, dark);
 
+    // Status bar (top)
     lv_obj_t* status_bar = lv_obj_create(lv_scr_act());
     lv_obj_set_size(status_bar, LV_HOR_RES, 20);
     lv_obj_set_style_bg_color(status_bar, lv_color_make(255, 140, 0), 0);
@@ -87,6 +87,7 @@ void initDisplay() {
     lv_obj_set_style_text_color(status_label, lv_color_black(), LV_PART_MAIN);
     lv_obj_align(status_label, LV_ALIGN_LEFT_MID, 1, 0);
 
+    // Bottom bar
     const int bottom_bar_height = 14;
     lv_obj_t* bottom_bar = lv_obj_create(lv_scr_act());
     lv_obj_set_size(bottom_bar, LV_HOR_RES, bottom_bar_height);
@@ -107,28 +108,46 @@ void initDisplay() {
     lv_obj_set_style_text_color(ip_label, lv_color_black(), LV_PART_MAIN);
     lv_obj_align(ip_label, LV_ALIGN_RIGHT_MID, -4, 0);
 
-    int log_box_height = LV_VER_RES - 20 - bottom_bar_height;
-    log_box = lv_textarea_create(lv_scr_act());
-    lv_obj_set_size(log_box, LV_HOR_RES, log_box_height);
-    lv_obj_align(log_box, LV_ALIGN_TOP_LEFT, 0, 20);
-    lv_textarea_set_max_length(log_box, 32767);
-    lv_textarea_set_text(log_box, "--");
-    lv_obj_set_style_text_font(log_box, &lv_font_montserrat_10, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(log_box, lv_color_black(), 0);
-    lv_obj_set_style_text_color(log_box, lv_color_white(), 0);
-    lv_obj_set_style_border_width(log_box, 1, 0);
-    lv_obj_set_style_border_color(log_box, lv_color_black(), 0);
-    lv_obj_set_scrollbar_mode(log_box, LV_SCROLLBAR_MODE_OFF);
+    // Center message area (fully black, no borders)
+    int center_h = LV_VER_RES - 20 - bottom_bar_height;
+    msg_container = lv_obj_create(lv_scr_act());
+    lv_obj_remove_style_all(msg_container);
+    lv_obj_set_size(msg_container, LV_HOR_RES, center_h);
+    lv_obj_align(msg_container, LV_ALIGN_TOP_LEFT, 0, 20);
+    lv_obj_set_style_bg_color(msg_container, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(msg_container, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(msg_container, 0, 0);
+    lv_obj_set_style_pad_all(msg_container, 6, 0);
+    lv_obj_clear_flag(msg_container, LV_OBJ_FLAG_SCROLLABLE);
 
+    msg_label = lv_label_create(msg_container);
+    lv_label_set_text(msg_label, "--");
+    // Use available font. For smaller text, enable another size (e.g., 8) in lv_conf.h.
+    lv_obj_set_style_text_font(msg_label, &lv_font_montserrat_10, LV_PART_MAIN);
+    lv_obj_set_style_text_color(msg_label, lv_color_white(), 0);
+    lv_label_set_long_mode(msg_label, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(msg_label, LV_PCT(100));
+    lv_obj_align(msg_label, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    // Screen style
     lv_obj_clear_flag(lv_scr_act(), LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_style_all(lv_scr_act());
     lv_obj_set_style_bg_color(lv_scr_act(), lv_color_black(), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(lv_scr_act(), LV_OPA_COVER, LV_PART_MAIN);
+
+    // Subscribe to BLE events AFTER UI is ready
+    ble_subscribe(on_ble_event, nullptr);
+
+    // Clear last message buffer
+    s_last_msg[0] = '\0';
+    s_msg_dirty = false;
 }
 
 void updateDisplay() {
+    // Pump LVGL
     lv_timer_handler();
 
+    // Uptime label
     static uint32_t last_sec = 0;
     uint32_t total_sec = millis() / 1000;
     if (total_sec != last_sec && status_label) {
@@ -149,30 +168,31 @@ void updateDisplay() {
         lv_label_set_text(status_label, buf);
     }
 
+    // Devices count (from Preferences)
     Preferences prefs;
     prefs.begin("stats", true);
     int count = prefs.getInt("users_detected", 0);
     prefs.end();
 
-    static int last_count = 0;
-    if (count > 0 && device_count_label) {
-        last_count = count;
-        char buf[8];
-        snprintf(buf, sizeof(buf), "x%d", count);
-        lv_label_set_text(device_count_label, buf);
-    }else{
-        char buf[8];
-        snprintf(buf, sizeof(buf), "");
-        lv_label_set_text(device_count_label, buf);
+    if (device_count_label) {
+        if (count > 0) {
+            char buf[8];
+            snprintf(buf, sizeof(buf), "x%d", count);
+            lv_label_set_text(device_count_label, buf);
+        } else {
+            lv_label_set_text(device_count_label, "");
+        }
     }
 
-    static uint32_t last_inspiration = 0;
-    if (millis() - last_inspiration > 300000) {
-        last_inspiration = millis();
-        clearLog();
-        generateInspiration();
+    // Update last message (apply UI change only here)
+    if (s_msg_dirty) {
+        s_msg_dirty = false;
+        if (msg_label && s_last_msg[0]) {
+            lv_label_set_text(msg_label, s_last_msg);
+        }
     }
 
+    // IP label
     IPAddress ip = WiFi.isConnected() ? WiFi.localIP() : WiFi.softAPIP();
     static String last_ip = "";
     String current_ip = "IP: " + ip.toString();
