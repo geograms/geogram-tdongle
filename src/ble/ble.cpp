@@ -26,7 +26,7 @@ static const uint16_t MSG_UUID_16 = 0xFFF0;
 #define DEDUP_WINDOW_MS 2000
 #endif
 #ifndef MIN_SINGLE_LEN
-#define MIN_SINGLE_LEN 5
+#define MIN_SINGLE_LEN 8
 #endif
 #ifndef INFLIGHT_TTL_MS
 #define INFLIGHT_TTL_MS (10UL * 60UL * 1000UL)
