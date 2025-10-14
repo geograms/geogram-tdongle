@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <string.h>
 #include <new>                 // placement new
+#include <stdarg.h>
 
 #include <BLEDevice.h>
 #include <BLEUtils.h>
@@ -11,6 +12,9 @@
 #include <BLEScan.h>
 
 #include "bluetoothmessage.h"
+
+// Forward weak hook (may be undefined in the app); ALWAYS guard before calling.
+extern "C" void messageCompleted(const BluetoothMessage& msg) __attribute__((weak));
 
 // ---------- Tunables ----------
 static const uint16_t MSG_UUID_16 = 0xFFF0;   // Service Data UUID for ADV text
@@ -97,7 +101,9 @@ static inline int inflight_index_2(const char* id2) {
 }
 
 static void inflight_reset(Inflight& slot) {
-  new (&slot.bm) BluetoothMessage();   // placement-new; no move/assign needed
+  // Properly destroy then placement-new to avoid leaks/heap corruption.
+  slot.bm.~BluetoothMessage();
+  new (&slot.bm) BluetoothMessage();
   slot.lastTouchMs = 0;
 }
 
@@ -175,7 +181,6 @@ static inline void mac_to_bytes(const BLEAddress& addr, uint8_t out[6]) {
   memcpy(out, native, 6);
 }
 
-
 void ble_unsubscribe(int token) {
   if (token <= 0) return;
   int idx = token - 1;
@@ -226,6 +231,14 @@ class AdvCb final : public BLEAdvertisedDeviceCallbacks {
     String payload = String(sd.c_str()); // '>' + text
     if (seen_recently_payload(payload, now)) return;
 
+    // Console echo: single-line '>' text seen
+    Serial.print("[ADV-TEXT] ");
+    Serial.print(payload);
+    Serial.print("  rssi=");
+    Serial.print(d.getRSSI());
+    Serial.print("  from=");
+    Serial.println(d.getAddress().toString().c_str());
+
     // Post SINGLE_TEXT event
     BleEvent ev = {};
     ev.type = BLE_EVT_SINGLE_TEXT;
@@ -262,7 +275,13 @@ class AdvCb final : public BLEAdvertisedDeviceCallbacks {
           String ck   = slot.bm.getChecksum();
           String msg  = slot.bm.getMessage();
 
-          // Truncate safely
+          // Print the completed message to the serial console
+          Serial.print('[');
+          Serial.print(from);
+          Serial.print("] ");
+          Serial.println(msg);
+
+          // Truncate safely into event payload
           strncpy(ev2.data.done.from, from.c_str(), sizeof(ev2.data.done.from)-1);
           ev2.data.done.from[sizeof(ev2.data.done.from)-1] = '\0';
           strncpy(ev2.data.done.to, to.c_str(), sizeof(ev2.data.done.to)-1);
@@ -277,10 +296,12 @@ class AdvCb final : public BLEAdvertisedDeviceCallbacks {
 
           q_push(&ev2);
 
-          // Legacy weak hook (optional)
-          messageCompleted(slot.bm);
+          // Legacy weak hook (optional) — only call if it's actually linked
+          if (messageCompleted) {
+            messageCompleted(slot.bm);
+          }
 
-          // Clear slot
+          // Clear slot (properly resets internal Strings)
           inflight_reset(slot);
         }
       }
@@ -366,6 +387,3 @@ void ble_inflight_purge_now() { inflight_sweep(millis() + INFLIGHT_TTL_MS + 1); 
 uint32_t ble_events_dropped(void) { return g_evt_dropped; }
 void ble_set_logger(void (*logger)(const char* line)) { g_logger = logger; }
 void ble_set_adv_dedupe_window_ms(uint32_t ms) { ble_set_dedup_window(ms); }
-
-// ---------- Legacy weak (provided in header) ----------
-extern "C" void messageCompleted(const BluetoothMessage& msg) __attribute__((weak));
