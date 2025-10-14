@@ -16,11 +16,14 @@ static lv_obj_t* device_count_label = nullptr;
 static lv_obj_t* msg_container = nullptr;
 static lv_obj_t* msg_label = nullptr;
 
-// ------- last message buffer (updated by BLE events, applied in updateDisplay) -------
-static char s_last_msg[512];          // fixed buffer to avoid heap churn
-static volatile bool s_msg_dirty = false;
+// -------- last N messages (updated by BLE events, applied in updateDisplay) --------
+static constexpr uint8_t MSG_SHOW_MAX = 3;
+static constexpr size_t  MSG_LINE_CAP = 256;          // per-line cap to avoid heap churn
+static char  s_msgs[MSG_SHOW_MAX][MSG_LINE_CAP];      // newest at index 0
+static uint8_t s_msgs_cnt = 0;
+static volatile bool s_msgs_dirty = false;
 
-// ---------------- BLE event → store last message (no LVGL calls here) ----------------
+// ---------------- BLE event → store last 3 messages (no LVGL calls here) ----------------
 static void on_ble_event(const BleEvent* e, void* /*ctx*/) {
     if (!e) return;
 
@@ -33,21 +36,36 @@ static void on_ble_event(const BleEvent* e, void* /*ctx*/) {
             const char* from_s = (from && from[0]) ? from : "---";
             const char* snip_s = snippet ? snippet : "";
 
-            bool truncated = (mlen > strlen(snip_s));
-            // Build "FROM: message…" into s_last_msg safely
-            if (truncated) {
-                snprintf(s_last_msg, sizeof(s_last_msg), "%s: %s…", from_s, snip_s);
+            char line[MSG_LINE_CAP];
+            if (mlen > strlen(snip_s)) {
+                snprintf(line, sizeof(line), "%s: %s…", from_s, snip_s);
             } else {
-                snprintf(s_last_msg, sizeof(s_last_msg), "%s: %s", from_s, snip_s);
+                snprintf(line, sizeof(line), "%s: %s", from_s, snip_s);
             }
-            s_msg_dirty = true;
+
+            // Append at the end; keep only the last MSG_SHOW_MAX messages
+            if (s_msgs_cnt < MSG_SHOW_MAX) {
+                strncpy(s_msgs[s_msgs_cnt], line, MSG_LINE_CAP - 1);
+                s_msgs[s_msgs_cnt][MSG_LINE_CAP - 1] = '\0';
+                s_msgs_cnt++;
+            } else {
+                // drop oldest by shifting up, put new at the last slot
+                for (uint8_t i = 1; i < MSG_SHOW_MAX; ++i) {
+                    strncpy(s_msgs[i - 1], s_msgs[i], MSG_LINE_CAP - 1);
+                    s_msgs[i - 1][MSG_LINE_CAP - 1] = '\0';
+                }
+                strncpy(s_msgs[MSG_SHOW_MAX - 1], line, MSG_LINE_CAP - 1);
+                s_msgs[MSG_SHOW_MAX - 1][MSG_LINE_CAP - 1] = '\0';
+            }
+
+            s_msgs_dirty = true;
             break;
         }
         default:
-            // We only display completed messages here.
             break;
     }
 }
+
 
 // ---------------- UI init/update ----------------
 void initDisplay() {
@@ -118,11 +136,12 @@ void initDisplay() {
     lv_obj_set_style_bg_opa(msg_container, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(msg_container, 0, 0);
     lv_obj_set_style_pad_all(msg_container, 6, 0);
-    lv_obj_clear_flag(msg_container, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Make the container scrollable so we can scroll to bottom for long messages
+    lv_obj_set_scrollbar_mode(msg_container, LV_SCROLLBAR_MODE_AUTO);
 
     msg_label = lv_label_create(msg_container);
     lv_label_set_text(msg_label, "--");
-    // Use available font. For smaller text, enable another size (e.g., 8) in lv_conf.h.
     lv_obj_set_style_text_font(msg_label, &lv_font_montserrat_10, LV_PART_MAIN);
     lv_obj_set_style_text_color(msg_label, lv_color_white(), 0);
     lv_label_set_long_mode(msg_label, LV_LABEL_LONG_WRAP);
@@ -138,9 +157,10 @@ void initDisplay() {
     // Subscribe to BLE events AFTER UI is ready
     ble_subscribe(on_ble_event, nullptr);
 
-    // Clear last message buffer
-    s_last_msg[0] = '\0';
-    s_msg_dirty = false;
+    // Clear buffers
+    for (uint8_t i = 0; i < MSG_SHOW_MAX; ++i) s_msgs[i][0] = '\0';
+    s_msgs_cnt = 0;
+    s_msgs_dirty = false;
 }
 
 void updateDisplay() {
@@ -184,11 +204,27 @@ void updateDisplay() {
         }
     }
 
-    // Update last message (apply UI change only here)
-    if (s_msg_dirty) {
-        s_msg_dirty = false;
-        if (msg_label && s_last_msg[0]) {
-            lv_label_set_text(msg_label, s_last_msg);
+    // Apply messages to UI
+    if (s_msgs_dirty) {
+        s_msgs_dirty = false;
+
+        if (msg_label) {
+            // Combine up to last 3 messages into one wrapped label (newest first)
+            char combined[MSG_SHOW_MAX * MSG_LINE_CAP + 8];
+            combined[0] = '\0';
+
+            for (uint8_t i = 0; i < s_msgs_cnt; ++i) {
+                strncat(combined, s_msgs[i], sizeof(combined) - 1 - strlen(combined));
+                if (i + 1 < s_msgs_cnt) {
+                    strncat(combined, "\n", sizeof(combined) - 1 - strlen(combined));
+                }
+            }
+
+            lv_label_set_text(msg_label, (s_msgs_cnt == 0) ? "--" : combined);
+
+            // Ensure layout and scroll to bottom so the newest end is visible
+            lv_obj_update_layout(msg_container);
+            lv_obj_scroll_to_y(msg_container, LV_COORD_MAX, LV_ANIM_OFF);
         }
     }
 
