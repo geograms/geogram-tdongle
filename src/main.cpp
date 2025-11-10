@@ -2,6 +2,10 @@
 #define FASTLED_ESP32_SPI
 #define FASTLED_ESP32_SPI_PINS 1
 
+// Device model and version for identification
+#define DEVICE_MODEL "LT1"  // LilyGo T-Dongle
+#define DEVICE_VERSION "0.0.1"
+
 #include "misc/pin_config.h"
 #include "misc/pinconfig.h"
 #include <TFT_eSPI.h>
@@ -25,7 +29,68 @@ CRGB leds;
 unsigned long lastRestart = 0;
 const unsigned long restartInterval = 60000;
 
+unsigned long lastPingTime = 0;
+const unsigned long pingInterval = 10000; // 10 seconds
+
 void nextPosition() {}
+void blinkLED(); // Forward declaration
+
+// Generate a random callsign starting with X1 followed by 4 alphanumeric characters
+String generateRandomCallsign() {
+    const char alphanumeric[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    String callsign = "X1";
+    for (int i = 0; i < 4; i++) {
+        callsign += alphanumeric[random(0, 36)];
+    }
+    return callsign;
+}
+
+// Get or generate callsign from preferences
+String getOrCreateCallsign() {
+    Preferences prefs;
+    prefs.begin("config", false); // Read-write mode
+    String callsign = prefs.getString("callsign", ""); // Shorter key name (max 15 chars)
+
+    // If no callsign exists or it's still the default, generate a new one
+    if (callsign.length() == 0 || callsign == "geogram") {
+        callsign = generateRandomCallsign();
+        prefs.putString("callsign", callsign);
+        Serial.print("Generated new callsign: ");
+        Serial.println(callsign);
+    } else {
+        Serial.print("Using existing callsign: ");
+        Serial.println(callsign);
+    }
+
+    prefs.end();
+    return callsign;
+}
+
+// Send Bluetooth ping with callsign
+void sendBluetoothPing() {
+    static String callsign = ""; // Cache the callsign
+
+    if (callsign.length() == 0) {
+        callsign = getOrCreateCallsign();
+    }
+
+    // Don't include '>' prefix - ble_send_text adds it automatically
+    // Include device model code and version: +CALLSIGN#LT1-0.0.1
+    String pingMsg = "+" + callsign + "#" + DEVICE_MODEL + "-" + DEVICE_VERSION;
+
+    if (pingMsg.length() <= 30) { // BLE payload limit for compact device codes
+        int result = ble_send_text((const uint8_t*)pingMsg.c_str(), pingMsg.length(), true);
+        if (result > 0) {
+            Serial.print("Ping sent: >");
+            Serial.println(pingMsg);
+            blinkLED(); // Visual feedback
+        } else {
+            Serial.println("Failed to send ping");
+        }
+    } else {
+        Serial.println("Ping message too long");
+    }
+}
 
 void blinkLED()
 {
@@ -98,14 +163,28 @@ void setup()
     ble_init("ESP32-TDongle");
     ble_start_listening(true);
 
+    // Initialize callsign and set first ping to happen 10 seconds after boot
+    getOrCreateCallsign();
+    lastPingTime = millis() - pingInterval + 10000; // First ping in 10 seconds
+
 }
 
 void loop()
 {
     button.tick();
-    ble_tick(); 
+    ble_tick();
     updateDisplay();
     updateTime();
+
+    // Send Bluetooth ping every 10 seconds with random delay to avoid collisions
+    unsigned long now = millis();
+    if (now - lastPingTime >= pingInterval) {
+        lastPingTime = now;
+        // Add random delay 0-500ms to avoid all devices transmitting simultaneously
+        delay(random(0, 500));
+        sendBluetoothPing();
+    }
+
     delay(5);
 
     /*
